@@ -120,8 +120,8 @@ before evaluating the fundamental function. Thus, A ANDN B evaluates to
 A AND (NOT B). Combining these two rules, for instance on NANDN, gives
 A NANDN B == NOT (A AND (NOT B)).
 
-These two rules, as applied to AND, OR, and partially to XNOR
-(there is no XNORN because XNORN == XNOR), make up the bulk of
+These two rules, as applied to AND, OR, and partially to NXOR
+(there is no NXORN because NXORN == NXOR), make up the bulk of
 the 2-arity functions. None of these functions are degenerate in the sense
 that they can be expressed trivially be a 0 or 1-arity function.
 
