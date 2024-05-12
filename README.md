@@ -355,10 +355,188 @@ we get 4 bits for each link, giving each link a range from -7 to 8.
 
 This is the breakdown of the 16 bits which constitute a data op.
 
-| CTL     | OPCODE  | IA    | IB    | LA       | LB        |
-| ------- | ------- | ----- | ----- | -------- | --------- |
-| `[0:1]` | `[2:5]` | `[6]` | `[7]` | `[8:11]` | `[12:15]` |
+| CTL    | OPCODE  | IA    | IB    | LA       | LB        |
+| ------ | ------- | ----- | ----- | -------- | --------- |
+| `2b00` | `[2:5]` | `[6]` | `[7]` | `[8:11]` | `[12:15]` |
 
-CTL has a width of 2, OPCODE, a width of 4, IA a width of 1, IB a width of 1,
+CTL has a width of 2, OPCODE a width of 4, IA a width of 1, IB a width of 1,
 LA a width of 4, and LB a width of 4. LA and LB essentially act as pointers
-to its dependent nodes' IA and IB, respectively.
+to its dependent nodes' IA and IB, respectively. A CTL value of `00` is
+what indicates to the algorithm that what it is dealing with is, in fact,
+a data op.
+
+## Hyperlink Modifier
+
+There are times when a link offset is not expressible with only 4 bits.
+The link offset included in the data op is designed to take advantage of
+locality, but when that is not an option for a particular link, there
+should be a mechanism for extending the range of that link. The hyperlink
+modifier aims to fill that gap.
+
+Though we previously imagined the DAG to be a two dimensional grid structure,
+in memory it will be stored as a contiguous piece of memory, topologically
+sorted such that a process can simply cycle through the ops sequentially.
+As such, we can place a _modifier_ op before a data op
+to indicate that the data op needs to be treated in a different manner
+than usual. This allows these modifiers to remain somewhat transparent
+to the data processing, and essentially gives each node more capabilities
+by simply tagging it with these modifier instructions.
+
+For now, the only modifier instruction that gets "attached" to a data
+node itself is the hyperlink modifier. It can come in either a
+one-dimensional or two-dimensional flavor (i.e. 1D and 2D). A 1D
+hyperlink means that there is a bit which indicates whether the hyperlink
+is making either a longitudinal or a lateral link. The rest of the bits
+of that 16 word indicates how big the offset is. Lateral is unsigned
+with an implicit start of 1, and lateral is signed with an implicit
+negative bias (reasoning given above when describing LA and LB).
+
+A 2D hyperlink is similar except you specify both a lateral and a longitudinal
+offset. Half the available bits are dedicated to the lateral offset, and
+the other half to the longitudinal offset.
+
+In addition, a hyperlink can specify which output it can forward. A 1 output
+hyperlink only forwards a specified output to the target. A 2 output
+hyperlink forwards both outputs to the target. An independent hyperlink
+specifies two different links - one for each output. Each of these links
+are specified as either a 1D or 2D link. Below is a chart to sort out
+what different options are available. There are twelve options,
+which will take 4 bits to sort out, plus the required two control bits.
+That leaves 10 bits available for defining links
+
+| Link Type | Capabilities                                               | Bits per link |
+| --------- | ---------------------------------------------------------- | ------------- |
+| OALAT     | Forwards only OA latitudinally only                        | 10            |
+| OALON     | Forwards only OA longitudinally only                       | 10            |
+| OA2D      | Forwards only OA in both dimensions                        | 5             |
+| OBLAT     | Forwards only OB latitudinally only                        | 10            |
+| OBLON     | Forwards only OB longitudinally only                       | 10            |
+| OB2D      | Forwards only OB in both dimensions                        | 5             |
+| ABLAT     | Forwards both OA and OB to same target latitudinally only  | 10            |
+| ABLON     | Forwards both OA and OB to same target longitudinally only | 10            |
+| AB2D      | Forwards both OA and OB to same target in both dimensions  | 5             |
+| OOLAT     | Forwards both OA and OB independently latitudinally only   | 5             |
+| OOLON     | Forwards both OA and OB independently longitudinally only  | 5             |
+| OO2D      | Forwards both OA and OB independently in both dimensions   | 2             |
+
+Given that normal links already have available 4 bits, it seems that these
+hyperlinks do not give much advantage unless we restrict ourselves
+to LAT or LON link types and ignore the OO link types. Given that,
+we now only have six options, meaning we also gain an additional bit we can
+devote to specifying the link offset. Below is the updated table.
+
+| OPCODE | Link Type | Capabilities                                               | Bits per link |
+| ------ | --------- | ---------------------------------------------------------- | ------------- |
+| 100    | OALAT     | Forwards only OA latitudinally only                        | 11            |
+| 101    | OALON     | Forwards only OA longitudinally only                       | 11            |
+| 010    | OBLAT     | Forwards only OB latitudinally only                        | 11            |
+| 011    | OBLON     | Forwards only OB longitudinally only                       | 11            |
+| 000    | ABLAT     | Forwards both OA and OB to same target latitudinally only  | 11            |
+| 111    | ABLON     | Forwards both OA and OB to same target longitudinally only | 11            |
+
+We will also specify that any one data node will have, at most, one
+hyperlink modifier preceding it. That might mean that it takes multiple
+intermediary hyperlinks in order to reach a target, but it will help
+simplify processing logic. A hyperlink modifier is specified with a CTL
+sequence of `01`.
+
+| CTL    | OPCODE  | HL       |
+| ------ | ------- | -------- |
+| `2b01` | `[2:4]` | `[5:15]` |
+
+Now, there is one more additional concern about these hyperlinks. We'd
+like to make its operation as independent as possible from the
+data processing that the actual data op is going to make. In other words,
+the modifier should be _transparent_ to the processing of a data op.
+The only difference that this modifying instruction makes is that,
+_in addition_ to whatever the data op does, it also indicates that
+the output be forwarded, as well, to the specified location. This implies
+that it does not prevent the data op from also establishing its own links
+as specified in that section.
+
+## CAP, ADD, and SUB
+
+However, there are times when we _do_ want the data op to _effectively_
+terminate its local updates, and cease influencing that region of the graph.
+In that case, what we need is a data op which takes in input but
+does not output anything. It is like a no-op, but which blocks until
+its input has arrived, yet does nothing beyond that. We will call it CAP
+(like a bottle cap) to indicate that it caps or stops that link. Below
+is the updated data op table to show its addition.
+
+| OpCode | Name      | Sensitivity | OA Table  | OB Table  |
+| ------ | --------- | ----------- | --------- | --------- |
+| 0000   | NT        | None        | 0         | 0         |
+| 1000   | NOR       | IA and IB   | 0001      | 0001      |
+| 0100   | CAP       | IA or IB    | None      | None      |
+| 1100   | NA        | IA          | 01        | 01        |
+| 0010   | Undefined | Undefined   | Undefined | Undefined |
+| 1010   | NB        | IB          | 01        | 01        |
+| 0110   | XOR       | IA and IB   | 0110      | 0110      |
+| 1110   | NAND      | IA and IB   | 0111      | 0111      |
+| 0001   | AND       | IA and IB   | 1000      | 1000      |
+| 1001   | NXOR      | IA and IB   | 1001      | 1001      |
+| 0101   | PB        | IB          | 10        | 10        |
+| 1101   | Undefined | Undefined   | Undefined | Undefined |
+| 0011   | PA        | IA          | 10        | 10        |
+| 1011   | Undefined | Undefined   | Undefined | Undefined |
+| 0111   | OR        | IA and IB   | 1110      | 1110      |
+| 1111   | TT        | None        | 1         | 1         |
+
+We've defined it such that it is sensitive to either IA _or_ IB. This means
+that it only ever expects one input, and that feeding it two inputs is
+undefined behavior, but that it could be either IA or IB.
+We can apply this same logic to NA, NB, PA, and PB,
+and consolidate them back into NOT and OT, while specifying their
+sensitivity lists to be either IA _or_ IB, indicating that this function
+only expects one input. This frees up two more op codes.
+
+| OpCode | Name      | Sensitivity | OA Table  | OB Table  |
+| ------ | --------- | ----------- | --------- | --------- |
+| 0000   | NT        | None        | 0         | 0         |
+| 1000   | NOR       | IA and IB   | 0001      | 0001      |
+| 0100   | CAP       | IA or IB    | None      | None      |
+| 1100   | NOT       | IA or IB    | 01        | 01        |
+| 0010   | Undefined | Undefined   | Undefined | Undefined |
+| 1010   | Undefined | Undefined   | Undefined | Undefined |
+| 0110   | XOR       | IA and IB   | 0110      | 0110      |
+| 1110   | NAND      | IA and IB   | 0111      | 0111      |
+| 0001   | AND       | IA and IB   | 1000      | 1000      |
+| 1001   | NXOR      | IA and IB   | 1001      | 1001      |
+| 0101   | Undefined | Undefined   | Undefined | Undefined |
+| 1101   | Undefined | Undefined   | Undefined | Undefined |
+| 0011   | OT        | IA or IB    | 10        | 10        |
+| 1011   | Undefined | Undefined   | Undefined | Undefined |
+| 0111   | OR        | IA and IB   | 1110      | 1110      |
+| 1111   | TT        | None        | 1         | 1         |
+
+Since we now have five extra opcodes, it is high time to add
+addition and subtraction to our list of functionality. Also,
+we'll reorganize our table such that it is by ascending opcode.
+
+| OpCode | Name      | Sensitivity | OA Table  | OB Table  |
+| ------ | --------- | ----------- | --------- | --------- |
+| 0000   | NT        | None        | 0         | 0         |
+| 0001   | AND       | IA and IB   | 1000      | 1000      |
+| 0010   | Undefined | Undefined   | Undefined | Undefined |
+| 0011   | OT        | IA or IB    | 10        | 10        |
+| 0100   | CAP       | IA or IB    | None      | None      |
+| 0101   | Undefined | Undefined   | Undefined | Undefined |
+| 0110   | XOR       | IA and IB   | 0110      | 0110      |
+| 0111   | OR        | IA and IB   | 1110      | 1110      |
+| 1000   | NOR       | IA and IB   | 0001      | 0001      |
+| 1001   | NXOR      | IA and IB   | 1001      | 1001      |
+| 1010   | ADD       | IA and IB   | 0110      | 1000      |
+| 1011   | SUB       | IA and IB   | 0110      | 0010      |
+| 1100   | NOT       | IA or IB    | 01        | 01        |
+| 1101   | Undefined | Undefined   | Undefined | Undefined |
+| 1110   | NAND      | IA and IB   | 0111      | 0111      |
+| 1111   | TT        | None        | 1         | 1         |
+
+ADD and SUB implement the standard half adder and half subtracter
+circuits, where OA is sum / diff and OB is carry / borrow, respectively.
+ADD and SUB are unique in this table since only they have outputs
+such that OA is not equivalent to OB. CAP is unique, of course, in that
+it has _no_ output.
+
+## The Transmission Gate
