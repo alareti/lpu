@@ -60,14 +60,14 @@ have a single output. Below are the truth tables for the boolean value of
 "true" and the boolean value of "false." Their function names are T and N,
 respectively.
 
-T Truth Table
+TT Truth Table
 | O |
 |---|
 | 1 |
 
 T = 1
 
-N Truth Table
+NT Truth Table
 | O |
 |---|
 | 0 |
@@ -86,8 +86,8 @@ N), 4 possible one argument functions, and 16 possible 2 argument functions.
 
 | Truth Table | Name  | Symbol | Usage              |
 | ----------- | ----- | ------ | ------------------ |
-| 0           | N     | ⊥      | ⊥ or N             |
-| 1           | T     | ⊤      | ⊤ or T             |
+| 0           | NT    | ⊥      | ⊥ or NT            |
+| 1           | TT    | ⊤      | ⊤ or TT            |
 | 00          | NOP   | ⊥      | ⊥ A or NOP A       |
 | 01          | OT    | ⊢      | ⊢ A or OT A        |
 | 10          | NOT   | ¬      | ¬ A or NOT A       |
@@ -162,28 +162,28 @@ since the protocol ensures that it never will be needed. The means that we can
 express any 0-arity, 1-arity, or 2-arity function using only a 2-arity (aka
 second order) look up table. The new functionality looks like this:
 
-| Truth Table | Name  | Symbol | Usage              | Comments |
-| ----------- | ----- | ------ | ------------------ | -------- |
-| 0000        | N     | ⊥      | ⊥                  |          |
-| 0001        | NOR   | ⊽      | A ⊽ B or A NOR B   |          |
-| 0010        | NORN  | ⩛      | A ⩛ B or A NORN B  |          |
-| 0011        | NOT   | ¬      | ¬ A or NOT A       |          |
-| 0100        | ANDN  | ⩑      | A ⩑ B or A ANDN B  |          |
-| 0101        |       |        |                    | Reserved |
-| 0110        | XOR   | ⊻      | A ⊻ B or A XOR B   |          |
-| 0111        | NAND  | ⊼      | A ⊼ B or A NAND B  |          |
-| 1000        | AND   | ∧      | A ∧ B or A AND B   |          |
-| 1001        | NXOR  | ⊙      | A ⊙ B or A NXOR B  |          |
-| 1010        |       |        |                    | Reserved |
-| 1011        | NANDN | ⩚      | A ⩚ B or A NANDN B |          |
-| 1100        | OT    | ⊢      | ⊢ A or OT A        |          |
-| 1101        | ORN   | ⩒      | A ⩒ B or A ORN B   |          |
-| 1110        | OR    | ∨      | A ∨ B or A OR B    |          |
-| 1111        | T     | ⊤      | ⊤                  |          |
+| OpCode | Truth Table | Name      | Symbol    | Usage (for inputs A and B)    | Comments              |
+| ------ | ----------- | --------- | --------- | ----------------------------- | --------------------- |
+| 0000   | 0           | NT        | ⊥         | ⊥ = NT = 0                    |                       |
+| 0001   | 0001        | NOR       | ⊽         | A ⊽ B = A NOR B = !(A \| B)   |                       |
+| 0010   | 0010        | NORN      | ⩛         | A ⩛ B = A NORN B = !(A \| !B) |                       |
+| 0011   | 01          | NOT       | ¬         | ¬ A = NOT A = !A              | Only evaluate input A |
+| 0100   | 0100        | ANDN      | ⩑         | A ⩑ B = A ANDN B = A & !B     |                       |
+| 0101   | Undefined   | Undefined | Undefined | Undefined                     | Reserved              |
+| 0110   | 0110        | XOR       | ⊻         | A ⊻ B = A XOR B = A ^ B       |                       |
+| 0111   | 0111        | NAND      | ⊼         | A ⊼ B = A NAND B = !(A & B)   |                       |
+| 1000   | 1000        | AND       | ∧         | A ∧ B = A AND B = A & B       |                       |
+| 1001   | 1001        | NXOR      | ⊙         | A ⊙ B = A NXOR B = !(A ^ B)   |                       |
+| 1010   | Undefined   | Undefined | Undefined | Undefined                     | Reserved              |
+| 1011   | 1011        | NANDN     | ⩚         | A ⩚ B = A NANDN B = !(A & !B) |                       |
+| 1100   | 10          | OT        | ⊢         | ⊢ A = OT A = A                | Only evaluate input A |
+| 1101   | 1101        | ORN       | ⩒         | A ⩒ B = A ORN B = A \| !B     |                       |
+| 1110   | 1110        | OR        | ∨         | A ∨ B = A OR B = A \| B       |                       |
+| 1111   | 1           | TT        | ⊤         | ⊤ = TT = 1                    |                       |
 
 We no longer have the capacity to perform NOTB or OTB, since any NOT or OT
 operation is guaranteed by protocol to be routed to input A. This also
-imposes some overhead in that 0101 and 1010 are not useful to us anymore.
+gains us flexibility since 0101 and 1010 are not useful to us anymore.
 However, what we gained instead is the capacity to perform arbitrary 0, 1,
 or 2-arity logical operations given only a second-order lookup table that
 naively would have only been capable of performing 2-arity operations. These
