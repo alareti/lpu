@@ -164,22 +164,22 @@ second order) look up table. The new functionality looks like this:
 
 | OpCode | Truth Table | Name      | Symbol    | Usage (for inputs A and B)    | Comments              |
 | ------ | ----------- | --------- | --------- | ----------------------------- | --------------------- |
-| 0000   | 0           | NT        | ⊥         | ⊥ = NT = 0                    |                       |
-| 0001   | 0001        | NOR       | ⊽         | A ⊽ B = A NOR B = !(A \| B)   |                       |
-| 0010   | 0010        | NORN      | ⩛         | A ⩛ B = A NORN B = !(A \| !B) |                       |
-| 0011   | 01          | NOT       | ¬         | ¬ A = NOT A = !A              | Only evaluate input A |
-| 0100   | 0100        | ANDN      | ⩑         | A ⩑ B = A ANDN B = A & !B     |                       |
-| 0101   | Undefined   | Undefined | Undefined | Undefined                     | Reserved              |
-| 0110   | 0110        | XOR       | ⊻         | A ⊻ B = A XOR B = A ^ B       |                       |
-| 0111   | 0111        | NAND      | ⊼         | A ⊼ B = A NAND B = !(A & B)   |                       |
-| 1000   | 1000        | AND       | ∧         | A ∧ B = A AND B = A & B       |                       |
-| 1001   | 1001        | NXOR      | ⊙         | A ⊙ B = A NXOR B = !(A ^ B)   |                       |
+| 0000   | 0           | NT        | ⊥         | ⊥ = NT = 0                    | Ignore inputs         |
+| 1000   | 0001        | NOR       | ⊽         | A ⊽ B = A NOR B = !(A \| B)   |                       |
+| 0100   | 0010        | NORN      | ⩛         | A ⩛ B = A NORN B = !(A \| !B) |                       |
+| 1100   | 01          | NOT       | ¬         | ¬ A = NOT A = !A              | Only evaluate input A |
+| 0010   | 0100        | ANDN      | ⩑         | A ⩑ B = A ANDN B = A & !B     |                       |
 | 1010   | Undefined   | Undefined | Undefined | Undefined                     | Reserved              |
-| 1011   | 1011        | NANDN     | ⩚         | A ⩚ B = A NANDN B = !(A & !B) |                       |
-| 1100   | 10          | OT        | ⊢         | ⊢ A = OT A = A                | Only evaluate input A |
-| 1101   | 1101        | ORN       | ⩒         | A ⩒ B = A ORN B = A \| !B     |                       |
-| 1110   | 1110        | OR        | ∨         | A ∨ B = A OR B = A \| B       |                       |
-| 1111   | 1           | TT        | ⊤         | ⊤ = TT = 1                    |                       |
+| 0110   | 0110        | XOR       | ⊻         | A ⊻ B = A XOR B = A ^ B       |                       |
+| 1110   | 0111        | NAND      | ⊼         | A ⊼ B = A NAND B = !(A & B)   |                       |
+| 0001   | 1000        | AND       | ∧         | A ∧ B = A AND B = A & B       |                       |
+| 1001   | 1001        | NXOR      | ⊙         | A ⊙ B = A NXOR B = !(A ^ B)   |                       |
+| 0101   | Undefined   | Undefined | Undefined | Undefined                     | Reserved              |
+| 1101   | 1011        | NANDN     | ⩚         | A ⩚ B = A NANDN B = !(A & !B) |                       |
+| 0011   | 10          | OT        | ⊢         | ⊢ A = OT A = A                | Only evaluate input A |
+| 1011   | 1101        | ORN       | ⩒         | A ⩒ B = A ORN B = A \| !B     |                       |
+| 0111   | 1110        | OR        | ∨         | A ∨ B = A OR B = A \| B       |                       |
+| 1111   | 1           | TT        | ⊤         | ⊤ = TT = 1                    | Ignore inputs         |
 
 We no longer have the capacity to perform NOTB or OTB, since any NOT or OT
 operation is guaranteed by protocol to be routed to input A. This also
@@ -192,15 +192,173 @@ computation, and is flexible enough to form the processing core of the nodes
 on a directed acyclic graph, the data structure which will form the backbone
 of the logic processing unit.
 
+One will also notice that the OpCode representation mirrors the truth
+table representation. That is so that the opcode has a dual function:
+It not only specifies what operation to perform, but it also serves as
+a look up table for all 2-arity functions. This allows one to implement
+an efficient datapath in silicon as any 2-arity operation can be implemented
+as a simple 4-to-1 multiplexer.
+
 ## Data Operation Code
 
 Every node on the DAG which comprises a "sub-block" of a program is limited
-to these 14 operations. Each node can process either 0, 1, or 2 incoming edges,
+to these 14 operations. Each node can process 2 incoming edges (potentially
+ignoring one or two of them),
 where each edge represents a single bit of information coming from some
-parent node. In order to allow for fanout, each node will be allowed to
-have up to 2 output edges connecting itself to other downstream child nodes
+upstream node. In order to allow for fanout, each node
+defines two output edges which (potentially) connects itself to other
+downstream child nodes
 which depend on the result of this operation. Thus, to completely describe
 a node (in memory), one needs 1 bit for the first input value,
 another bit for the second possible input value, 4 bits for the operation to
 be performed by the node itself, and however many bits to evaluate the location
 of this node's dependant's inputs.
+
+Any directed acyclic graph can be topologically sorted into layers where
+each layer contains nodes which do not depend on each other directly,
+though they may have common upstream dependencies which reside in previous
+layers. All nodes with no upstream
+dependencies whatsoever belong in the first layer, and all nodes with no
+downstream dependents whatsoever belong in the last layer. Direct dependents
+will always be found in the subsequent layer, assuming that they don't
+depend on nodes which in turn depend on this node. In which case,
+they will always reside in the layer subsequent the _intervening_ node.
+
+To completely specify a node, we must know three things: the operation it
+performs, the data it must process (i.e. its input), and where it must
+store its output (i.e. the locations of its dependent nodes). We have
+already defined a protocol for specifying a node's inputs and its operation
+in memory. At some definite location in memory, we have so far 6 meaningful
+bits. The first bit corresponds to the first input (IA). The second bit
+corresponds to the second input (IB). The next four bits (OPCODE) correspond to
+the operation to be performed (see chart above). For each OPCODE, there
+is an associated truth table which defines the values of the two output
+edges emanating from the node (OA and OB for Output A and Output B). For
+all OPCODEs defined above, OA = OB. However, we have a couple
+undefined OPCODEs, and those could be useful later for adding
+functions where OA does not equal OB, or a function which outputs
+nothing (essentially a no-op).
+
+Lastly, we must define a protocol for where each node must store its output.
+For each node, there are two outputs, OA and OB. And associated with each
+output is a link (labeled LA and LB). We can specify that any OA must be
+routed to some node's IA, and similarly, any OB must be routed to some
+dependent node's IB. Thus, for some Node1 connected to some Node2 and Node3,
+`OA_1` can connect to `IA_2` or `IA_3`, but cannot connect to `IB_2` or `IB_3`,
+whereas `OB_1` can connect to `IB_2` or `IB_3`, but cannot connect to
+`IA_2` or `IA_3`.
+
+This, however, presents an issue as there exist non-symmetric OPCODEs where
+the order in which one presents an input matters (namely all postfix-N
+operations). Additionally, there is no way for us to call the NOT or OT
+functions on any OB, since they only operate on input A.
+
+This, however, is easily remedied by reintroducing the OTB and NOTB operations
+discussed earlier, but reinterpreting them as _switches_. Their purpose
+is not computation so much as to be able to take some IB and make it
+available on OA, such that some other downstream node can take it in as
+its IA. As such, we add them back to the OPCODE list as SW and NSW, where
+SW stands for "switch." This introduces something of a bias for A into the
+naming conventions, but the reality is that we now are perfectly
+symmetric in operation and can route any OA to IB and vice-versa by
+either introducing a buffer OT or SW between the two linked nodes.
+Similarly, we can substitute these buffers with their prefix-N counterparts
+should we wish to simulate some postfix-N operation. As such,
+we alter the names of the codes themselves to reflect this - OT becomes
+PA ("Pass through A"), NOT becomes NA ("Not A"), and similar mnemonics for
+PB and NB.
+
+As such, we remove the postfix-N operations, as they no longer add much
+value to our set of OPCODEs, and we want space for more useful operations
+like addition or no-op. The updated chart is shown below.
+
+| OpCode | Name      | Sensitivity | OA Table  | OB Table  |
+| ------ | --------- | ----------- | --------- | --------- |
+| 0000   | NT        | None        | 0         | 0         |
+| 1000   | NOR       | IA and IB   | 0001      | 0001      |
+| 0100   | Undefined | Undefined   | Undefined | Undefined |
+| 1100   | NA        | IA          | 01        | 01        |
+| 0010   | Undefined | Undefined   | Undefined | Undefined |
+| 1010   | NB        | IB          | 01        | 01        |
+| 0110   | XOR       | IA and IB   | 0110      | 0110      |
+| 1110   | NAND      | IA and IB   | 0111      | 0111      |
+| 0001   | AND       | IA and IB   | 1000      | 1000      |
+| 1001   | NXOR      | IA and IB   | 1001      | 1001      |
+| 0101   | PB        | IB          | 10        | 10        |
+| 1101   | Undefined | Undefined   | Undefined | Undefined |
+| 0011   | PA        | IA          | 10        | 10        |
+| 1011   | Undefined | Undefined   | Undefined | Undefined |
+| 0111   | OR        | IA and IB   | 1110      | 1110      |
+| 1111   | TT        | None        | 1         | 1         |
+
+Let's return to defining LA and LB (the output linkage data). So far,
+we've decided that all OA gets routed to some IA, and all OB gets routed
+to some IB, so nothing needs to be encoded there. Also, there is no need
+to route to some node on the current or previous layer of a DAG, and so at
+a minimum the lateral movement starts at the subsequent layer of the DAG.
+Similarly, we want to exploit longitudinal locality, meaning that most often
+a node is going to be connected to some node nearby itself.
+
+When I speak of lateral or longitudinal movement, think of the directed graph
+as a tabular grid with slots in them of where the nodes will be placed.
+A node, then, can be located by a layer index and a depth index, where the
+origin is the top-left most corner of the grid, the layer index determines
+how far to the right (lateral) the node is, and the depth index determines
+how far down (longitudinal) the node is. Not every cell of the grid has
+to be filled (in fact, when viewing it like this, most will probably be
+empty for any real combinational circuit). This theoretical empty space
+need not affect the actual performance of our computation, but it
+still serves as a good mental model for this discussion.
+
+LA and LB should be thought of as relative offsets on this grid that
+point from the current node to IA of the destination node specified by LA
+and IB of the destination node specified by LB. We have two dimensions of
+movement - lateral (moving left or right) and longitudinal (moving
+either up or down). Now, since this is a sorted directed acyclic graph,
+any link _must_ point to the right, starting at the layer directly
+following the layer the node resides. Also, given our ability to buffer
+data using PA, PB, NA, and NB, we are not too constrained in our overall
+lateral movement. As such, we could assign one unsigned bit to specifying
+lateral movement, which pretty much states that the dependent node resides
+on either the next layer or the layer directly after that one. All the
+rest of the available bits should be assigned to signed longitudinal movement.
+It is signed, since it is possible for a node to connect to a node that
+is longitudinally above or below it (assuming, of course, that it is
+not on the same or previous layer).
+
+Since the absolute depth index starts at 0 and only increases, we want to have
+slightly more options of increasing as opposed to decreasing the
+longitudinal relative offset. Unfortunately, two's complement representation
+has more options for negative numbers than for positive numbers (e.g. 5 bits
+allows you to express the range \[-16, 15\]). As such, we'll store the
+negative of the actual offset, and have the depth index start at 0 and
+have it _decrease_ into the negative numbers to indicate _increasing_
+depth.
+
+Since we're going for a compact representation of a node, we should aim to
+fit all 5 components (IA, IB, OPCODE, LA, LB) into at most 16 bits. As
+we've said before, IA and IB each take up one bit, OPCODE takes up 4 bits,
+and we already have one bit each for LA and LB assigned to lateral offset.
+That means that we have 8 bits left for longitudinal offset, split evenly
+for LA and LB. However, we need to reserve two bits in the 16 bit word for
+other control purposes. That leaves only 3 longitudinal bits each for LA and
+LB. However, that will have to do, letting them each specify a node either
+4 down or 3 up from their current position. This may be insufficient
+and we may want to redefine this protocol to have _no_
+latitudinal bits and only longitudinal bits. That would mean that every node
+can only connect to a node on the next layer, no longer able to do so
+on the layer after, needing intermediaries to meet those nodes.
+
+Right now, we will take the latter approach, and dedicate all link
+data for longitudinal movement and neglect latitudinal movement. That means
+we get 4 bits for each link, giving each link a range from -7 to 8.
+
+This is the breakdown of the 16 bits which constitute a data op.
+
+| CTL     | OPCODE  | IA    | IB    | LA       | LB        |
+| ------- | ------- | ----- | ----- | -------- | --------- |
+| `[0:1]` | `[2:5]` | `[6]` | `[7]` | `[8:11]` | `[12:15]` |
+
+CTL has a width of 2, OPCODE, a width of 4, IA a width of 1, IB a width of 1,
+LA a width of 4, and LB a width of 4. LA and LB essentially act as pointers
+to its dependent nodes' IA and IB, respectively.
