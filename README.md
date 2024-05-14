@@ -365,12 +365,12 @@ to its dependent nodes' IA and IB, respectively. A CTL value of `00` is
 what indicates to the algorithm that what it is dealing with is, in fact,
 a data op.
 
-## Hyperlink Modifier
+## The Jumper Modifier
 
 There are times when a link offset is not expressible with only 4 bits.
 The link offset included in the data op is designed to take advantage of
 locality, but when that is not an option for a particular link, there
-should be a mechanism for extending the range of that link. The hyperlink
+should be a mechanism for extending the range of that link. The jumper
 modifier aims to fill that gap.
 
 Though we previously imagined the DAG to be a two dimensional grid structure,
@@ -380,24 +380,23 @@ As such, we can place a _modifier_ op before a data op
 to indicate that the data op needs to be treated in a different manner
 than usual. This allows these modifiers to remain somewhat transparent
 to the data processing, and essentially gives each node more capabilities
-by simply tagging it with these modifier instructions.
+by simply tagging it with one of these modifier instructions.
 
-For now, the only modifier instruction that gets "attached" to a data
-node itself is the hyperlink modifier. It can come in either a
+The jumper modifier can conceivably come in either a
 one-dimensional or two-dimensional flavor (i.e. 1D and 2D). A 1D
-hyperlink means that there is a bit which indicates whether the hyperlink
+jumper means that there is a bit which indicates whether the jumper
 is making either a longitudinal or a lateral link. The rest of the bits
 of that 16 word indicates how big the offset is. Lateral is unsigned
 with an implicit start of 1, and lateral is signed with an implicit
 negative bias (reasoning given above when describing LA and LB).
 
-A 2D hyperlink is similar except you specify both a lateral and a longitudinal
+A 2D jumper is similar except you specify both a lateral and a longitudinal
 offset. Half the available bits are dedicated to the lateral offset, and
 the other half to the longitudinal offset.
 
-In addition, a hyperlink can specify which output it can forward. A 1 output
-hyperlink only forwards a specified output to the target. A 2 output
-hyperlink forwards both outputs to the target. An independent hyperlink
+In addition, a jumper can specify which output it wishes to forward. A 1 output
+jumper only forwards a specified output to the target. A 2 output
+jumper forwards both outputs to the target. An independent jumper
 specifies two different links - one for each output. Each of these links
 are specified as either a 1D or 2D link. Below is a chart to sort out
 what different options are available. There are twelve options,
@@ -420,7 +419,7 @@ That leaves 10 bits available for defining links
 | OO2D      | Forwards both OA and OB independently in both dimensions   | 2             |
 
 Given that normal links already have available 4 bits, it seems that these
-hyperlinks do not give much advantage unless we restrict ourselves
+jumper do not give much advantage unless we restrict ourselves
 to LAT or LON link types and ignore the OO link types. Given that,
 we now only have six options, meaning we also gain an additional bit we can
 devote to specifying the link offset. Below is the updated table.
@@ -431,20 +430,20 @@ devote to specifying the link offset. Below is the updated table.
 | 101    | OALON     | Forwards only OA longitudinally only                       | 11            |
 | 010    | OBLAT     | Forwards only OB latitudinally only                        | 11            |
 | 011    | OBLON     | Forwards only OB longitudinally only                       | 11            |
-| 000    | ABLAT     | Forwards both OA and OB to same target latitudinally only  | 11            |
+| 110    | ABLAT     | Forwards both OA and OB to same target latitudinally only  | 11            |
 | 111    | ABLON     | Forwards both OA and OB to same target longitudinally only | 11            |
 
 We will also specify that any one data node will have, at most, one
-hyperlink modifier preceding it. That might mean that it takes multiple
-intermediary hyperlinks in order to reach a target, but it will help
-simplify processing logic. A hyperlink modifier is specified with a CTL
+modifier preceding it. That might mean that it takes multiple
+intermediary jumper in order to reach a target, but it will help
+simplify processing logic. A jumper modifier is specified with a CTL
 sequence of `01`.
 
-| CTL    | OPCODE  | HL       |
+| CTL    | OPCODE  | OFFSET   |
 | ------ | ------- | -------- |
 | `2b01` | `[2:4]` | `[5:15]` |
 
-Now, there is one more additional concern about these hyperlinks. We'd
+Now, there is one more additional concern about these jumper. We'd
 like to make its operation as independent as possible from the
 data processing that the actual data op is going to make. In other words,
 the modifier should be _transparent_ to the processing of a data op.
@@ -540,3 +539,310 @@ such that OA is not equivalent to OB. CAP is unique, of course, in that
 it has _no_ output.
 
 ## The Transmission Gate
+
+A transmission gate allows for tri-state logic. Essentially, it defines
+whether a particular edge in a graph is either driven high, low,
+or intentionally left un-driven. This is called a high impedance state,
+and is usually labeled X on a truth table. This leads us to discussing
+the life-cycle of a graph. A graph is a series of topologically sorted
+nodes that are connected by edges. For our purposes, we only
+allow ourselves to define a certain type of graph called a
+directed acyclic graph (DAG), and further, that each node, generally speaking,
+takes in up to two edges and outputs two edges. This is enough for
+_describing_ a DAG - simply specify the nodes and how their
+associated edges.
+
+However, we wish to do more than that. We wish to _evaluate_ a DAG.
+Luckily, a DAG implies that there are a set of root nodes which
+take in no incoming edges and a set of leaf nodes which take in no
+incoming edges. These are analogous to the inputs and outputs of a graph,
+and usually topological sorting puts root nodes as close to the front
+of the list, and leaf nodes at the back of the list.
+
+Regardless, there exists an easy method for evaluating a DAG - iterate
+through a topologically sorted list of nodes and evaluate them one
+at a time. This ensures that a node's input(s) will always be available,
+as its dependencies outputs have already been evaluated, and are
+available for processing by the current working node.
+
+This model falls apart, however, when we start to add more cores
+evaluating the DAG independently. Ideally, we would want each N cores
+to process N sequential data ops independently (we're ignoring
+control ops for now). One must remember that each data op should
+have enough information contained within itself to allow itself
+to completely be evaluated by a core running in parallel with other cores
+which are also simultaneously evaluating data ops in the close vicinity
+of the current data op.
+
+A core theoretically, then, only has the 16 bits presented to it to
+determine the output value of that node. However, it could very well
+be possible that some other core is busy processing one if its
+_direct descendants_. This would be disastrous, since that core
+had not yet finished writing its output to the input of the current
+core's data input (IA and IB) fields of the current op. That constitutes
+a data hazard, since it implies that we have somehow incorrectly
+processed a data op, and were operating on garbage data which had
+nothing to do with what we cared about doing.
+
+The actual implementation of the mechanism which resolves this hazard
+is left for another section, but I wish to give the general idea of
+the approach taken, as it relates directly to how we evaluate the
+transmission gate. The basic idea is that we must encode the op in such
+a way that we are informed that its input has been provided and is
+ready to be evaluated, as opposed to simply just providing the data
+levels (high or low) which constitutes the meaning of that data.
+This is an example of _event_ triggered logic (the event being
+the input going from an unready to a ready state, similar to
+triggering on clock edges) as opposed to _level_ driven logic, which implies
+that we only are sensitive to what the _value_ of the data is
+at our inputs.
+
+This is why for each opcode, there is an associated sensitivity list:
+what _event_ causes an operation to be evaluated? For some, both
+inputs need to be available for to evaluate the op (like OR and XOR)
+For others, they specify no incoming edges - they must be left
+(like TT and NT).
+
+The last group of sensitivity lists is somewhat special, in that
+they require one _activated_ incoming graph edge in order to
+allow them to process, yet can host either one or two incoming edges,
+simultaneously (so long as no more than one is ever active at any point).
+
+This creates a conundrum for the two-input case, since _all_ ops
+defined so far necessarily activate their output links once evaluated.
+There is no way for any of the nodes to conditionally activate or
+deactivate their output, and so if any such nodes connect to two of
+these "one or the other" (think of the OT op), this leads to
+undefined behavior as there exist two active inputs on what should
+intuitively be single input nodes.
+
+However, it is very useful to be able to specify "one or the other" logic.
+One could do so with a multiplexer, and to good effect, with pure
+logic gates, bypassing the need for tri-state logic. However, OT is
+also useful for "path-switching." Right now we've defined our
+protocol such that a OA always routes to some IA, and an OB always
+routes to some IB. It would be impossible to pipe some B path to
+an A path using only the dual-input-triggered logic ops defined above.
+We could define two sets of OT, like a "fan-out A" and "fan-out B" ops
+(which if you remember, was what the old NA, NB, PA, and PB ops did),
+but this feels rather wasteful, and also limits us to never
+being able to specify "one or the other" logic in the future - it only
+acts as a stop-gap in order to give us path switching at the cost
+of two extra ops (in an already very limited set of 16!).
+
+So, we include the transmission gate, which is the only op capable
+of conditionally activating its output. It will be named PG (short
+for "pass gate"), and its truth table is as follows.
+
+PG Truth Table
+| A | B | O |
+|---|---|---|
+| 1 | 1 | 1 |
+| 1 | 0 | X |
+| 0 | 1 | 0 |
+| 0 | 0 | X |
+
+X is the "high impedance" state. It essentially means that the edge
+is intentionally being un-driven. All other gates, once evaluated,
+drive their respective outputs either high (logic 1) or low (logic 0).
+Thus, only PG ops can safely be attached to OT nodes that have more
+than one input edge specified, as they expect that at any point in
+time at most only one input will ever be activated (a.k.a. "driven").
+
+So, when processing a DAG, each edge has four possible states: unevaluated,
+driven low, driven high, and high impedance (i.e. "un-driven"). To
+return back to our mental model of the multicore machine processing
+this DAG, this information must be encoded in either the protocol or the
+data itself in order for them to evaluate ops properly and atomically (i.e.
+without needing to look at the graph as a whole in order to figure out
+whether the current op is ready to be processed). We update our table
+of ops accordingly. We also add another column to show the relationship
+between the Sensitivity list and the minimum / maximum amount of incoming
+edges a node supports.
+
+We've also changed the definition of CAP such
+that it supports any combination of input triggers (i.e. if no inputs
+are driven, if no inputs are even evaluated, if some inputs are driven
+and some are high impedance and some are not evaluated, and if all
+inputs are evaluated). In other words, once a processor comes across
+a CAP op, it can immediately evaluate it regardless of its inputs. This
+is different behavior from NT and TT which have sensitivities of "None"
+since they don't expect _any_ input whatsoever. They are not allowed
+to have incoming edges, whereas CAP can have 0, 1, or 2 incoming edges
+at whatever one of the four states of evaluation mentioned previously.
+
+Another point to mention is that when a processor comes across let's
+say an AND node which expects two active driven (i.e. in one of either
+"driven high" or "driven low" of the four states), it is undefined
+behavior to have the state of its incoming edge be in the "high impedance"
+state. This implies that PG is only really useful for connecting to
+either OT or NOT nodes (or potentially CAP). Another thing to realize
+is that, for such "dual-sensitive" ops (which cover those ops with
+sensitivity lists that say "IA and IB"), it is _not_ undefined
+behavior for the two incoming edges to be in the "unevaluated" state,
+since that could mean (assuming a well-behaved graph) that its
+dependencies simply have not been evaluated yet. The core would then
+be free to either wait until the state turns into some sort of active
+driven, or it can go on and evaluate other nodes in the process.
+Eventually some core will return back to it (not necessarily the same one)
+in order to further along the processing of that particular graph.
+
+I'm also going to reorder some of the ops around (CAP, PG, ADD, and SUB)
+to align better with some underlying patterns.
+
+| OpCode | Name      | Min / Max Inputs | Sensitivity | OA Table  | OB Table  |
+| ------ | --------- | ---------------- | ----------- | --------- | --------- |
+| 0000   | NT        | 0 / 0            | None        | 0         | 0         |
+| 0001   | AND       | 2 / 2            | IA and IB   | 1000      | 1000      |
+| 0010   | CAP       | 0 / 2            | Any         | None      | None      |
+| 0011   | OT        | 1 / 2            | IA or IB    | 10        | 10        |
+| 0100   | SUB       | 2 / 2            | IA and IB   | 0110      | 0010      |
+| 0101   | Undefined | Undefined        | Undefined   | Undefined | Undefined |
+| 0110   | XOR       | 2 / 2            | IA and IB   | 0110      | 0110      |
+| 0111   | OR        | 2 / 2            | IA and IB   | 1110      | 1110      |
+| 1000   | NOR       | 2 / 2            | IA and IB   | 0001      | 0001      |
+| 1001   | NXOR      | 2 / 2            | IA and IB   | 1001      | 1001      |
+| 1010   | PG        | 2 / 2            | IA and IB   | 1X0X      | 1X0X      |
+| 1011   | ADD       | 2 / 2            | IA and IB   | 0110      | 1000      |
+| 1100   | NOT       | 1 / 2            | IA or IB    | 01        | 01        |
+| 1101   | Undefined | Undefined        | Undefined   | Undefined | Undefined |
+| 1110   | NAND      | 2 / 2            | IA and IB   | 0111      | 0111      |
+| 1111   | TT        | 0 / 0            | None        | 1         | 1         |
+
+A final note. Great care must be taken to ensure that, for every input to
+an OT or a NOT, one and _only_ one of its input edges are to be activated.
+The PG gate is perhaps the most powerful of the dual-sensitive ops, as
+it can implement all of the others, yet none of the others can implement it.
+However, it is the most difficult to check whether it causes undefined
+behavior or not. For all other logic ops, it is easy to check if they
+are improperly driving a single-sensitivity op (OT and NOT) since
+they can have at most one edge linking to it. Such static analysis
+is much harder to do with PGs, since their correct functioning cannot
+be determined by such simple static analysis.
+
+## Differential Signals and DP
+
+Most every data op is _single-ended_, meaning that they really only compute
+one value of meaning, and drive both of their outputs with that value.
+Two, however, are _differential_, in that the difference between OA and
+OT actually carries value - in other words, their outputs can be different,
+and aren't always simple copies of each other. Those, of course, are ADD
+and SUB, as they represent the standard half-adder and half-subtracter
+truth tables, respectively. As such, their OAs are not the same as their OBs.
+Such nodes, if they wish to buffer their outputs would have to resort
+to using two OT buffers instead of just the one that single-ended
+nodes need.
+
+To address this issue, we'll define another op named DP (which stands for
+"diff pair") that will allow us to carry such differential signals.
+All it will do is copy its IA to its OA and its IB to its OB. It is
+shown in the following updated data op table.
+
+| OpCode | Name      | Sensitivity | OA Table  | OB Table  |
+| ------ | --------- | ----------- | --------- | --------- |
+| 0000   | NT        | None        | 0         | 0         |
+| 0001   | AND       | IA and IB   | 1000      | 1000      |
+| 0010   | CAP       | Any         | None      | None      |
+| 0011   | OT        | IA or IB    | 10        | 10        |
+| 0100   | SUB       | IA and IB   | 0110      | 0010      |
+| 0101   | PG        | IA and IB   | 1X0X      | 1X0X      |
+| 0110   | XOR       | IA and IB   | 0110      | 0110      |
+| 0111   | OR        | IA and IB   | 1110      | 1110      |
+| 1000   | NOR       | IA and IB   | 0001      | 0001      |
+| 1001   | NXOR      | IA and IB   | 1001      | 1001      |
+| 1010   | DP        | IA and IB   | 1100      | 1010      |
+| 1011   | ADD       | IA and IB   | 0110      | 1000      |
+| 1100   | NOT       | IA or IB    | 01        | 01        |
+| 1101   | Undefined | Undefined   | Undefined | Undefined |
+| 1110   | NAND      | IA and IB   | 0111      | 0111      |
+| 1111   | TT        | None        | 1         | 1         |
+
+Now, there is more to DP than just more efficient buffering for
+ADD and SUB. It can be used to carry _any_ signal where the
+difference between its elements carry meaning, not just for the
+ADD and SUB outputs. This allows, for example, for a compact way to jumper
+multiple pieces of data more efficiently, needing only one control
+op for to handle effectively two jumper of single-ended data
+by first buffering them into a DP. It also allows for more efficient
+local routing - by first compressing data into a bus of DPs, more logic
+nodes can be reachable by the rather limited range of +/- 8 longitudinal
+offsets.
+
+## The Localizer Modifier
+
+Let's return to the notion of a control modifier. What follows is a couple of
+charts briefly summarizing the jumper modifier:
+
+| OPCODE | Link Type | Capabilities                                               | Bits per link |
+| ------ | --------- | ---------------------------------------------------------- | ------------- |
+| 100    | OALAT     | Forwards only OA latitudinally only                        | 11            |
+| 101    | OALON     | Forwards only OA longitudinally only                       | 11            |
+| 010    | OBLAT     | Forwards only OB latitudinally only                        | 11            |
+| 011    | OBLON     | Forwards only OB longitudinally only                       | 11            |
+| 110    | ABLAT     | Forwards both OA and OB to same target latitudinally only  | 11            |
+| 111    | ABLON     | Forwards both OA and OB to same target longitudinally only | 11            |
+
+| CTL    | OPCODE  | OFFSET   |
+| ------ | ------- | -------- |
+| `2b01` | `[2:4]` | `[5:15]` |
+
+Let's also recall that all nodes define their relationship to each
+other by means of _offset_. This is helpful for determining their
+relative position to one another, but does not let us determine their
+absolute positions. To illustrate this further, let's return to our
+mental model of a DAG as a two dimensional grid where cells are occupied
+by data ops, and each data op (ignoring those that are jumped) can
+at most be connected to another data op which directly succeeds it
+latitudinally (i.e. must be in the next layer) and cannot be
+more than an absolute distance of 8 cells away latitudinally (i.e. must
+be within 8 cells up or down of the current cell's location).
+
+The issue with this model is that one can easily imagine graphs whose
+very structure would prohibit us from placing a data op in every cell
+no matter how hard we try. However, in order to reconcile this mental
+model with the other model of the data ops as occupying contiguous
+pieces of memory, there must be some mechanism which allows one to
+specify on the sparse 2D graph the spacing between two successive nodes
+in the packed array. This mechanism is the localizer modifier.
+
+Since for any two subsequent nodes the absolute latitudinal distance between
+them can either be 0 or 1, this requires only a single bit of information.
+The rest of the data can be devoted to absolute longitudinal offsets
+in order to encode how far separated a data node is from its preceding
+neighbor on the same layer.
+
+We will define, also, that if the latitudinal distance between two nodes
+is 1, then the longitudinal offset no longer describes the distance from
+the preceding node to the new node, but rather the distance from
+the origin of that layer to whatever cell index the data op effectively
+resides in. Additionally, this data op _must_ be the very first
+node in that layer, starting from cell index 0.
+
+Luckily, there is enough space in what has already been defined as the
+jumper modifier to hold this localizer modifier. The full spec for
+this is shown below:
+
+| OPCODE | Link Type | Capabilities                                       |
+| ------ | --------- | -------------------------------------------------- |
+| 000    | LOCLON    | Localizer that offsets long locale                 |
+| 001    | LOCLATLON | Localizer that offsets lat and long locale         |
+| 100    | OALAT     | Jumper for only OA lat only                        |
+| 101    | OALON     | Jumper for only OA long only                       |
+| 010    | OBLAT     | Jumper for only OB lat only                        |
+| 011    | OBLON     | Jumper for only OB long only                       |
+| 110    | ABLAT     | Jumper for both OA and OB to same target lat only  |
+| 111    | ABLON     | Jumper for both OA and OB to same target long only |
+
+| CTL    | OPCODE  | OFFSET   |
+| ------ | ------- | -------- |
+| `2b01` | `[2:4]` | `[5:15]` |
+
+This table now completely describes the "offset" op (much like the other table
+of ops corresponding to CTL = `2b00` defines the "data" op).
+
+Also, as a note, that these offset ops only are a subset of the broader
+class of control ops, and for any one data op, we've already defined
+that there can at most be only one control op which serves to modify
+(a.k.a. extend) a data op.
+
+## DAG Output and FS
