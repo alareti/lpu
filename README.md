@@ -538,7 +538,7 @@ ADD and SUB are unique in this table since only they have outputs
 such that OA is not equivalent to OB. CAP is unique, of course, in that
 it has _no_ output.
 
-## The Transmission Gate
+## The Pass Gate
 
 A transmission gate allows for tri-state logic. Essentially, it defines
 whether a particular edge in a graph is either driven high, low,
@@ -845,4 +845,217 @@ class of control ops, and for any one data op, we've already defined
 that there can at most be only one control op which serves to modify
 (a.k.a. extend) a data op.
 
-## DAG Output and FS
+## Input, Output, and FS
+
+Offset ops and data ops are enough to allow us to process the internals
+of a DAG. When we think of some generic DAG, we think of it having
+a set of input nodes, a set of output nodes, and various intermediary
+nodes which fully connect the inputs to the outputs. This is a special
+case, however, of all possible DAGs. For example, a DAG can have several
+independent trees, where each tree is disjoint from the others
+(such a DAG is called a "forest"). Or, a DAG can be constructed such that
+any of its inputs eventually propagates to all of its outputs, such that
+any one input can trigger an output.
+
+These structures present problems, because we must know whether
+a DAG is _done_ being evaluated or not so that we can inform
+other processes which drive this DAG whether it is ready to accept
+input or not. To bring this down to a less abstract level, let's
+consider a basic AND gate. Usually, we think of an AND gate atomically.
+That is, it computes its input instantaneously, such that once there is
+a change in inputs, there immediately exists the updated value
+at its output. However, if we were to say that there exists some form
+of unknown _delay_ associated with the computation of an AND gate,
+then we would somehow have to inform those who drive this AND gate
+when it is ready to accept more input.
+
+The reason why we haven't had to worry about this _propagation delay_
+thus far is because we have constrained our attention to a form of
+_linear_ logic where we start at some already existing input nodes and
+compute, linearly, all downstream descendants, because we assumed that,
+since we _could_ evaluate the DAG (i.e. all edges started in the
+"unevaluated" state), then we _would_ evaluate it by first evaluating
+all the input nodes, then all the intermediary nodes (which have
+nicely been sorted in topological order already, so it amounts to a
+simple iteration loop), and then evaluate all the output nodes.
+Once this was done, we simply assumed that the processor will know
+through some sort of address lookup where the result of this computation
+is supposed to go, and so will push the input nodes of that _downstream_
+DAG. Once that is done, then it will now be able to evaluate _that_
+DAG, and update _its_ descendant's inputs, and so the cycle continues.
+
+However, an issue arises. If there exists some input to a DAG that
+does not cause all output nodes to update, how will the processor
+know that the DAG has completed evaluating? There could be some upstream
+DAG wishing to drive our input, but not all of our outputs have been
+driven, nor will they ever be driven, given the very nature and structure
+of the way we've defined our DAG. If we'd defined our "definition of done"
+to simply be when all output nodes have been driven, then we would
+deadlock, which is a form of _structural_ hazard.
+
+We _could_ specify that every combination of inputs into a DAG _must_
+cause all outputs to be driven. However, this would severely limit
+the performance of our system of interconnected DAGs, since for
+_any_ change of input into the system, _all_ DAGs must be evaluated
+until the system can accept another change of inputs. This is a non-starter.
+We need to be able to _conditionally_ drive downstream DAGs, so that
+only those DAGs necessary for processing the new input are triggered.
+
+At this point, it may be useful to think of every DAG as a _module_ with
+a set of binary inputs and a set of binary outputs. Each of these
+modules can be connected such that a graph of modules is formed, connecting
+various modules together. Much like how we interpreted each data op
+as a node connected to other data op nodes in a DAG, so too we can
+think of the _system_ as a graph of modules, whose inputs and outputs
+are also connected via edges to each other.
+
+And I say _graph_ instead of _DAG_ with great intention - we shall allow
+_feedback_ at the module level (which is _disallowed_ at the DAG level).
+We do not now have the luxury of simply assuming that a module is
+ready to be evaluated like each data op was at the DAG level. We must
+specify a "definition of done" in order to indicate to any upstream
+modules that we are ready to take in more input, since we have not
+only finished evaluating the model, but have also finished _driving_
+all downstream modules. With this we have definitively moved from
+the realm of _linear_ logic to _non-linear_ logic, and so different
+constraints must be met.
+
+What we _will_ specify, however, is that any output at the module
+level must be connected to some module's input. This remains the same
+at both the DAG level and at the module level, indicating that at both levels
+there exist no dangling edges. This specification ensures that when there
+exists some edge, the processor is confident simply by its presence, that
+if it _can_ be evaluated, then it will be _useful_ to evaluate it, since it
+_cannot_ be left dangling.
+
+What this also means is that a single output _cannot_ drive more than one
+downstream module. If we want to drive two modules with the same data,
+then at the DAG level we must buffer that data (perhaps with some
+OT ops) to two separate sets of nodes, specify both sets of nodes
+as output nodes, and at the module level dictate that one set of outputs goes
+to one downstream module, and that the other set of outputs goes to the other
+module. In this way, any number of modules can be driven by one module
+while maintaining the singly-terminating edge rule already established.
+
+This is all fine, but we still need to define our "definition of done"
+for a DAG, such that at the module level, we can conditionally activate
+output edges so that only the modules who _ought_ to process data
+_will_ process data. At the DAG level, we already have the mechanism
+for this - the PG op. The PG op can conditionally activate or leave
+unevaluated an OT node which, when specified as an output, would at the
+module level also leave an inter-module edge un-evaluated. At the DAG
+level, each edge could be in one of four states: un-evaluated,
+driven high, driven low, or high-impedance (a.k.a. floating). At the
+module level, however, since we are now dealing with non-linear logic,
+we will specify that any edge can only be in one of three states:
+un-evaluated, driven high, or driven low. This will simplify evaluation
+since we'll know that if some edge _can_ be evaluated, then we
+_should_ evaluate it, since it will definitely have some impact downstream
+since it must, at that point, be driven high or low.
+
+Also, I'd like to clarify what an inter-module edge actually connects at
+the DAG level. An inter-module edge connects a module's output node to another
+module's input node. That means that the upstream node's OA and OB are
+routed directly to the downstream node's IA and IB. Care must be taken
+to connect single-ended outputs to single-ended inputs, and
+differential outputs to differential inputs, though there may be circumstances
+where that is not appropriate, like when the IO interface intentionally
+converts single-ended signals to differential signals or vice-versa.
+
+Additionally, at the DAG level, we run into a problem _actually_ using
+DP or OT, or any other "outputting" data op (a.k.a. all ops so far
+except for CAP) for the purpose of assigning them to be module level outputs.
+The reason being that they all implicitly assume that there exist
+link targets (specified by OA and OB) that need updating _within_ the
+DAG itself, though the only entity receiving them are other modules.
+This causes issues since then an output node would have to CAP
+an "outputting" node's outputs, implying that there can exist further
+data ops to process beyond the last output node, which is not ideal.
+
+Thus, we define another sort of data op called FS ("full stop") that
+is sensitive to IA and IB (as opposed to CAP which is sensitive to anything)
+but that has no output capability (similar to CAP). The now complete
+data op chart looks like this. Also, since CAP has evolved to be more
+of a no-op than anything else, I'll change its name to NOP.
+
+| OpCode | Name | Sensitivity | OA Table | OB Table |
+| ------ | ---- | ----------- | -------- | -------- |
+| 0000   | NT   | None        | 0        | 0        |
+| 0001   | AND  | IA and IB   | 1000     | 1000     |
+| 0010   | NOP  | Any         | None     | None     |
+| 0011   | OT   | IA or IB    | 10       | 10       |
+| 0100   | SUB  | IA and IB   | 0110     | 0010     |
+| 0101   | PG   | IA and IB   | 1X0X     | 1X0X     |
+| 0110   | XOR  | IA and IB   | 0110     | 0110     |
+| 0111   | OR   | IA and IB   | 1110     | 1110     |
+| 1000   | NOR  | IA and IB   | 0001     | 0001     |
+| 1001   | NXOR | IA and IB   | 1001     | 1001     |
+| 1010   | DP   | IA and IB   | 1100     | 1010     |
+| 1011   | ADD  | IA and IB   | 0110     | 1000     |
+| 1100   | NOT  | IA or IB    | 01       | 01       |
+| 1101   | FS   | IA and IB   | None     | None     |
+| 1110   | NAND | IA and IB   | 0111     | 0111     |
+| 1111   | TT   | None        | 1        | 1        |
+
+Note that when assigning an FS as an output, the processor
+will take its inputs and forward them to other modules, similar
+to how DP simply takes its inputs and forwards them as is to other
+nodes. In a lot of cases, I expect modules to implement their input
+nodes as DPs, since any node which has meaningful input sensitivity
+would function well, and DP can carry two bits of information as opposed
+to just one for OT.
+
+How can an output node reference a specific input node of another module?
+The first thing we can do is label each input node as such so
+the processor can recognize it as an input node. We'll specify
+another type of modifier control op for IO to help facilitate this. This
+is defined for a CTL pattern of `2b10`. It comes in two flavors,
+Input and Output, and of the 16 available bits, 2 or devoted to CTL
+and the rest to specifying INDEX.
+
+For a module input, the Input flavor of the IO modifier specifies its ID,
+like a pin number on an IC. For Output, it needs to define both
+the "relative module offset" and also the input index of the target node.
+The Output modifier specifies the target input node's index within
+the graph that it is embedded in. 14 bits implies that there is a maximum
+of 2 ^ 14 inputs this protocol supports on any given DAG. Below is
+what the internals of an FS op looks like.
+
+| CTL    | OPCODE   | IA    | IB    | OFFSET   |
+| ------ | -------- | ----- | ----- | -------- |
+| `2b00` | `4b1101` | `[6]` | `[7]` | `[8:15]` |
+
+We have 8 remaining bits to specify the relative module offset which
+is given by the remaining 8 least significant bits of the FS data op.
+Notice that this is a permanent interpretation of FS - it can only
+be an output node in a DAG. It is also the only node which _requires_
+a CTL op to precede it. Similarly, any other type of data op
+which is modified by an IO modifier is implicitly assumed to be an input
+node. This is what allows us to devote 14 bits of a 16 bit instruction
+towards defining an input node's index - the type of op it modifies
+is what defines whether the modifier is the input or output flavor.
+
+The OFFSET field in the FS op specifies a relative offset between
+its containing module and its neighboring modules in memory. We can
+conceptually imagine a processor, once finished loading the process
+in its entirety, assigns an index to each module according to its place
+in memory. It can do this since input nodes are specified to always
+be at the start of the graph (since the constitute the first layer) and
+output nodes are specified to always be at the end of the graph (since
+they invariably constitute the last layer). A processor can thus
+efficiently search through memory, assigning indices to memory locations
+as it comes across output nodes abutting input nodes. Or the processor
+can enforce alignment such that it degenerates into a simple index reference.
+However the method, it is assumed that the processor knows the indices
+of the various modules and where they reside in memory.
+
+The OFFSET field specifies the relative module index offset from the output
+node's containing module. An OFFSET of 0 means that the output node feeds
+an input node of its own module. OFFSET is signed, meaning it can feed
+modules that are located before or after itself in memory.
+
+This two additions, the FS op and the IO modifier allows for inter-module
+edges. However, we still need to define the "definition of done" for
+a module. We'll proceed to that in the next section.
+
+## Definition of Done
