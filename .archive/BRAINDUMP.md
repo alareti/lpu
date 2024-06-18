@@ -1150,16 +1150,16 @@ as its LA and LB fields are combined into one OFFSET field.
 | 0001   | AND  | IA and IB   | 1000     | 1000     |
 | 0010   | NOP  | Any         | None     | None     |
 | 0011   | OT   | IA or IB    | 10       | 10       |
-| 0100   | SUB  | IA and IB   | 0110     | 0010     |
-| 0101   | PG   | IA and IB   | 1X0X     | 1X0X     |
+| 0100   | ADD  | IA and IB   | 0110     | 1000     |
+| 0101   | IN   | IA          | 10       | 10       |
 | 0110   | XOR  | IA and IB   | 0110     | 0110     |
 | 0111   | OR   | IA and IB   | 1110     | 1110     |
 | 1000   | NOR  | IA and IB   | 0001     | 0001     |
 | 1001   | NXOR | IA and IB   | 1001     | 1001     |
-| 1010   | DP   | IA and IB   | 1100     | 1010     |
-| 1011   | ADD  | IA and IB   | 0110     | 1000     |
+| 1010   | OUT  | IA and IB   | 1X0X     | 1X0X     |
+| 1011   | SUB  | IA and IB   | 0110     | 0010     |
 | 1100   | NOT  | IA or IB    | 01       | 01       |
-| 1101   | FS   | IA and IB   | None     | None     |
+| 1101   | PG   | IA and IB   | 1X0X     | 1X0X     |
 | 1110   | NAND | IA and IB   | 0111     | 0111     |
 | 1111   | TT   | None        | 1        | 1        |
 

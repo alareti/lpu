@@ -1,5 +1,5 @@
-struct Dag {
-    instructions: Vec<Instr>,
+struct Module {
+    graph: Box<Graph>,
     nodes: Vec<Node>,
     phase: Phase,
 }
@@ -19,21 +19,23 @@ enum Phase {
     Odd,
 }
 
+struct Graph(Vec<Instr>);
+
 enum Instr {
+    Simple(DataOp),
     Modded(ModOp, DataOp),
-    Dubbed(DataOp, DataOp),
 }
 
 struct ModOp {
     code: ModOpCode,
-    r#mod: u16,
+    modifier: u16,
 }
 
 enum ModOpCode {
-    LocLon,
-    LocLatLon,
-    JumpLon,
-    JumpLat,
+    Locale,
+    LocalePlus,
+    JumperLon,
+    JumperLat,
     PortIn,
     PortOut,
 }
@@ -57,6 +59,9 @@ impl DataOp {
         // Assert preconditions of all the codes
         match self.code {
             DataOpCode::Nop => {}
+            DataOpCode::In => {
+                assert_ne!(ia, None)
+            }
             DataOpCode::Ot | DataOpCode::Not => {
                 assert!((ia.is_some() && ib.is_none()) || (ia.is_none() && ib.is_some()))
             }
@@ -68,10 +73,9 @@ impl DataOp {
             | DataOpCode::Or
             | DataOpCode::Nor
             | DataOpCode::Nxor
-            | DataOpCode::Dp
             | DataOpCode::Add
             | DataOpCode::Nand
-            | DataOpCode::Fs => assert_ne!((ia, ib), (None, None)),
+            | DataOpCode::Out => assert_ne!((ia, ib), (None, None)),
         }
 
         // Evaluate output of code
@@ -146,14 +150,6 @@ impl DataOp {
                     b: Some(o),
                 }
             }
-            DataOpCode::Dp => {
-                let oa = ia.unwrap();
-                let ob = ib.unwrap();
-                Data {
-                    a: Some(oa),
-                    b: Some(ob),
-                }
-            }
             DataOpCode::Add => {
                 let oa = ia.unwrap() ^ ib.unwrap();
                 let ob = ia.unwrap() & ib.unwrap();
@@ -175,7 +171,6 @@ impl DataOp {
                     b: Some(o),
                 }
             }
-            DataOpCode::Fs => Data { a: None, b: None },
             DataOpCode::Nand => {
                 let o = !(ia.unwrap() & ib.unwrap());
                 Data {
@@ -187,6 +182,18 @@ impl DataOp {
                 a: Some(true),
                 b: Some(true),
             },
+            DataOpCode::Out => {
+                let o = match ib.unwrap() {
+                    false => None,
+                    true => Some(ia.unwrap()),
+                };
+
+                Data { a: o, b: o }
+            }
+            DataOpCode::In => Data {
+                a: Some(ia.unwrap()),
+                b: Some(ia.unwrap()),
+            },
         }
     }
 }
@@ -196,16 +203,16 @@ enum DataOpCode {
     And,
     Nop,
     Ot,
-    Sub,
+    Add,
+    In,
     Pg,
     Xor,
     Or,
     Nor,
     Nxor,
-    Dp,
-    Add,
+    Out,
+    Sub,
     Not,
-    Fs,
     Nand,
     Tt,
 }
